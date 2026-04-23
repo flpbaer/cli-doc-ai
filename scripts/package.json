@@ -1,0 +1,12 @@
+{
+  "name": "auto-docs-script",
+  "version": "1.0.0",
+  "description": "AI-powered CHANGELOG generator for GitHub Actions",
+  "type": "module",
+  "scripts": {
+    "generate": "node generate-docs.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

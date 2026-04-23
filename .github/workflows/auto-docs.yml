@@ -1,0 +1,141 @@
+name: Auto Documentation
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  generate-docs:
+    name: Generate PR Documentation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          # Checkout the PR head branch so we can commit back to it
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: scripts/package.json
+
+      - name: Install script dependencies
+        run: npm ci
+        working-directory: scripts
+
+      - name: Collect PR metadata
+        id: pr_meta
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          # PR basic info
+          PR_NUMBER="${{ github.event.pull_request.number }}"
+          PR_TITLE="${{ github.event.pull_request.title }}"
+          PR_AUTHOR="${{ github.event.pull_request.user.login }}"
+          BASE_SHA="${{ github.event.pull_request.base.sha }}"
+          HEAD_SHA="${{ github.event.pull_request.head.sha }}"
+
+          echo "pr_number=$PR_NUMBER" >> $GITHUB_OUTPUT
+          echo "pr_title=$PR_TITLE" >> $GITHUB_OUTPUT
+          echo "pr_author=$PR_AUTHOR" >> $GITHUB_OUTPUT
+
+          # Collect commit list (hash + message)
+          COMMITS=$(git log --pretty=format:"%h %s" "$BASE_SHA".."$HEAD_SHA" 2>/dev/null || \
+                    git log --pretty=format:"%h %s" "origin/main..HEAD" 2>/dev/null)
+          echo "commits<<EOF" >> $GITHUB_OUTPUT
+          echo "$COMMITS" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Collect changed files with stats
+          DIFF_STAT=$(git diff --stat "$BASE_SHA".."$HEAD_SHA" 2>/dev/null || \
+                      git diff --stat "origin/main..HEAD" 2>/dev/null)
+          echo "diff_stat<<EOF" >> $GITHUB_OUTPUT
+          echo "$DIFF_STAT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+          # Collect condensed diff (limit to avoid token overflow)
+          DIFF_CONTENT=$(git diff "$BASE_SHA".."$HEAD_SHA" -- \
+            '*.ts' '*.tsx' '*.js' '*.jsx' '*.py' '*.go' '*.java' '*.cs' '*.rb' \
+            '*.json' '*.yaml' '*.yml' '*.toml' '*.md' \
+            2>/dev/null | head -c 12000 || \
+            git diff "origin/main..HEAD" -- \
+            '*.ts' '*.tsx' '*.js' '*.jsx' '*.py' '*.go' '*.java' '*.cs' '*.rb' \
+            '*.json' '*.yaml' '*.yml' '*.toml' '*.md' \
+            2>/dev/null | head -c 12000)
+          echo "diff_content<<EOF" >> $GITHUB_OUTPUT
+          echo "$DIFF_CONTENT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Detect version
+        id: version
+        run: |
+          VERSION=""
+
+          # Try package.json first
+          if [ -f "package.json" ]; then
+            VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo "")
+          fi
+
+          # Try pyproject.toml
+          if [ -z "$VERSION" ] && [ -f "pyproject.toml" ]; then
+            VERSION=$(grep -m1 '^version' pyproject.toml | sed 's/version = "\(.*\)"/\1/' || echo "")
+          fi
+
+          # Try Cargo.toml
+          if [ -z "$VERSION" ] && [ -f "Cargo.toml" ]; then
+            VERSION=$(grep -m1 '^version' Cargo.toml | sed 's/version = "\(.*\)"/\1/' || echo "")
+          fi
+
+          # Fallback to latest git tag or PR number
+          if [ -z "$VERSION" ]; then
+            VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "PR-${{ github.event.pull_request.number }}")
+          fi
+
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Detected version: $VERSION"
+
+      - name: Generate documentation with AI
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENROUTER_MODEL: ${{ secrets.OPENROUTER_MODEL }}
+          PR_NUMBER: ${{ steps.pr_meta.outputs.pr_number }}
+          PR_TITLE: ${{ steps.pr_meta.outputs.pr_title }}
+          PR_AUTHOR: ${{ steps.pr_meta.outputs.pr_author }}
+          VERSION: ${{ steps.version.outputs.version }}
+          COMMITS: ${{ steps.pr_meta.outputs.commits }}
+          DIFF_STAT: ${{ steps.pr_meta.outputs.diff_stat }}
+          DIFF_CONTENT: ${{ steps.pr_meta.outputs.diff_content }}
+          REPO_NAME: ${{ github.repository }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: node scripts/generate-docs.js
+
+      - name: Commit updated CHANGELOG
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add CHANGELOG.md
+
+          # Only commit if there are actual changes
+          if git diff --staged --quiet; then
+            echo "No changes to CHANGELOG.md, skipping commit."
+          else
+            git commit -m "docs: update CHANGELOG for PR #${{ github.event.pull_request.number }} [skip ci]"
+            git push origin ${{ github.head_ref }}
+            echo "CHANGELOG.md updated and pushed."
+          fi

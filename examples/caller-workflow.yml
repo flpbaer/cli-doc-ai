@@ -1,0 +1,67 @@
+# ============================================================
+# Example: how to use the cli-doc-ai action in YOUR repository
+#
+# Copy this file to:
+#   .github/workflows/auto-docs.yml
+# inside your target repository.
+#
+# Required secret in your repo:
+#   OPENROUTER_API_KEY  →  Settings → Secrets → Actions
+# ============================================================
+
+name: Auto Documentation
+
+on:
+  pull_request:
+    branches:
+      - main
+    types:
+      - opened
+      - synchronize
+      - reopened
+
+permissions:
+  contents: write
+  pull-requests: read
+
+jobs:
+  generate-docs:
+    name: Generate PR Documentation
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout your repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.head_ref }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      # -------------------------------------------------------
+      # Use the cli-doc-ai action directly from GitHub
+      # Replace YOUR_GITHUB_USER with your actual username/org
+      # -------------------------------------------------------
+      - name: Generate CHANGELOG entry
+        uses: YOUR_GITHUB_USER/cli-doc-ai@v1
+        with:
+          openrouter-api-key: ${{ secrets.OPENROUTER_API_KEY }}
+
+          # Optional — defaults to mistralai/mistral-7b-instruct:free (free tier)
+          # Uncomment and change to use a different model:
+          # openrouter-model: 'anthropic/claude-3.5-sonnet'
+          # openrouter-model: 'openai/gpt-4o'
+
+          # Optional — defaults to CHANGELOG.md at the repo root
+          # changelog-path: 'docs/CHANGELOG.md'
+
+      - name: Commit updated CHANGELOG
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add CHANGELOG.md
+          if git diff --staged --quiet; then
+            echo "No changes to commit."
+          else
+            git commit -m "docs: update CHANGELOG for PR #${{ github.event.pull_request.number }} [skip ci]"
+            git push origin ${{ github.head_ref }}
+          fi
