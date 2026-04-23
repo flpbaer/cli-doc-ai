@@ -27,16 +27,13 @@ jobs:
           ref: ${{ github.head_ref }}
           token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
         with:
-          node-version: '20'
-          cache: 'npm'
-          cache-dependency-path: scripts/package.json
+          bun-version: latest
 
-      - name: Install script dependencies
-        run: npm ci
-        working-directory: scripts
+      - name: Install dependencies and build
+        run: bun install && bun run build
 
       - name: Collect PR metadata
         id: pr_meta
@@ -88,7 +85,7 @@ jobs:
 
           # Try package.json first
           if [ -f "package.json" ]; then
-            VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo "")
+            VERSION=$(bun -e "console.log(require('./package.json').version)" 2>/dev/null || echo "")
           fi
 
           # Try pyproject.toml
@@ -122,7 +119,7 @@ jobs:
           DIFF_CONTENT: ${{ steps.pr_meta.outputs.diff_content }}
           REPO_NAME: ${{ github.repository }}
           PR_URL: ${{ github.event.pull_request.html_url }}
-        run: node scripts/generate-docs.js
+        run: bun dist/action.js
 
       - name: Commit updated CHANGELOG
         run: |

@@ -1,0 +1,27 @@
+{
+  "name": "cli-doc-ai",
+  "version": "1.0.0",
+  "description": "AI-powered CHANGELOG generator — GitHub Action + interactive CLI",
+  "type": "module",
+  "bin": {
+    "doc-ai": "./dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "start:cli": "bun dist/cli.js",
+    "start:action": "bun dist/action.js"
+  },
+  "engines": {
+    "bun": ">=1.0"
+  },
+  "dependencies": {
+    "@clack/prompts": "^0.9.1",
+    "chalk": "^5.3.0",
+    "execa": "^9.3.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.4.5"
+  }
+}

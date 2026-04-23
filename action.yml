@@ -30,15 +30,15 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Setup Node.js
-      uses: actions/setup-node@v4
+    - name: Setup Bun
+      uses: oven-sh/setup-bun@v2
       with:
-        node-version: '20'
+        bun-version: latest
 
-    - name: Install action dependencies
+    - name: Install and build action
       shell: bash
-      run: npm ci
-      working-directory: ${{ github.action_path }}/scripts
+      working-directory: ${{ github.action_path }}
+      run: bun install && bun run build
 
     - name: Collect PR metadata
       id: pr_meta
@@ -78,7 +78,7 @@ runs:
         VERSION=""
 
         if [ -f "package.json" ]; then
-          VERSION=$(node -p "require('./package.json').version" 2>/dev/null || echo "")
+          VERSION=$(bun -e "console.log(require('./package.json').version)" 2>/dev/null || echo "")
         fi
 
         if [ -z "$VERSION" ] && [ -f "pyproject.toml" ]; then
@@ -111,6 +111,5 @@ runs:
         COMMITS: ${{ steps.pr_meta.outputs.commits }}
         DIFF_STAT: ${{ steps.pr_meta.outputs.diff_stat }}
         DIFF_CONTENT: ${{ steps.pr_meta.outputs.diff_content }}
-        # Tell the script where the caller's workspace is
         CALLER_WORKSPACE: ${{ github.workspace }}
-      run: node ${{ github.action_path }}/scripts/generate-docs.js
+      run: bun ${{ github.action_path }}/dist/action.js
