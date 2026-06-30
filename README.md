@@ -1,6 +1,6 @@
 # cli-doc-ai
 
-GitHub Action + CLI that automatically generates CHANGELOG entries using AI (OpenRouter) based on PR commits and diffs.
+GitHub Action + CLI that uses AI (OpenRouter) to automatically generate CHANGELOG entries from PR commits and diffs, and to generate project documentation (business rules, implementation templates, casual overview) and enrich task descriptions — so code review has more context and is more assertive.
 
 ## How it works
 
@@ -89,6 +89,35 @@ The CLI will guide you through:
 - Picking the base branch to compare against
 - Setting the version and release title
 - Previewing the generated entry before writing
+
+---
+
+## Documentation agents (for better code review context)
+
+Besides CHANGELOG entries, the CLI can scan your codebase and generate documentation meant to
+be fed as context to an AI code-review agent (or read by your team), so reviews can be more
+specific and assertive:
+
+| Mode | Output | What it's for |
+|------|--------|----------------|
+| Document the entire application | `docs/application.md` | Architecture, key components, data models |
+| Document business rules | `docs/business-rules.md` | Domain validations, invariants, and rules a PR must respect |
+| Document implementation templates | `docs/templates.md` | Recurring conventions/recipes a PR should follow |
+| Document a casual overview | `docs/overview.md` | Plain-language onboarding summary |
+
+## Enrich a task description
+
+Turns a rough task into a detailed implementation spec (acceptance criteria, relevant business
+rules, suggested approach, edge cases, open questions), using the documentation above as ground
+truth — so there's less ambiguity before the code is even written.
+
+The task can come from:
+- Pasted text
+- A local file
+- A GitHub issue (requires the [`gh` CLI](https://cli.github.com/) installed and authenticated —
+  falls back to pasting manually if it's not available)
+
+For best results, generate the business rules and templates docs first.
 
 ---
 
