@@ -1,12 +1,15 @@
 const OPENROUTER_URL = 'https://openrouter.ai/api/v1/chat/completions';
 export const DEFAULT_MODEL = 'meta-llama/llama-3.3-70b-instruct:free';
 
-// Fallback chain: if the primary model is rate-limited, tries the next one
+// Fallback chain: if the primary model is rate-limited, tries the next one.
+// Spread across different upstream providers on purpose — several free
+// models route through the same provider (e.g. Venice), so when that
+// provider is congested, every model on it 429s at once.
 export const FREE_MODEL_FALLBACKS = [
   'meta-llama/llama-3.3-70b-instruct:free',
-  'google/gemma-3-27b-it:free',
   'qwen/qwen3-coder:free',
   'meta-llama/llama-3.2-3b-instruct:free',
+  'nvidia/nemotron-nano-9b-v2:free',
 ];
 
 export interface OpenRouterOptions {
@@ -55,7 +58,7 @@ async function fetchModel(
  * If the chosen model is rate-limited (429) or unavailable (404),
  * automatically retries with the next model in the free fallback chain.
  */
-export async function callAI(
+export async function callOpenRouter(
   prompt: string,
   opts: OpenRouterOptions
 ): Promise<string> {
@@ -112,5 +115,5 @@ export async function generateSummary(
   opts: OpenRouterOptions
 ): Promise<string> {
   const { promptChanges } = await import('./prompts.js');
-  return callAI(promptChanges(ctx), { ...opts, maxTokens: 1024 });
+  return callOpenRouter(promptChanges(ctx, 'en'), { ...opts, maxTokens: 1024 });
 }

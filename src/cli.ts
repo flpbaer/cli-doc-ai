@@ -7,7 +7,11 @@
  *   1. Document changes (git diff)
  *   2. Document a specific file
  *   3. Document the entire application
- *   4. Create release notes
+ *   4. Document business rules
+ *   5. Document implementation templates
+ *   6. Document a casual overview
+ *   7. Create release notes
+ *   8. Enrich a task description
  */
 
 import fs from 'fs';
@@ -15,7 +19,9 @@ import path from 'path';
 import * as p from '@clack/prompts';
 import chalk from 'chalk';
 
-import { callAI, DEFAULT_MODEL, type OpenRouterOptions, type PRContext } from './core/openrouter.js';
+import { DEFAULT_MODEL, type PRContext } from './core/openrouter.js';
+import { generateInLanguage, type AIOptions, type Provider } from './core/ai.js';
+import { listOllamaModels, DEFAULT_OLLAMA_BASE_URL } from './core/ollama.js';
 import { collectGitContext, getRepoName } from './core/git.js';
 import { detectVersion } from './core/version.js';
 import { updateChangelog } from './core/changelog.js';
@@ -31,9 +37,11 @@ import {
   promptSingleFile,
   promptFullApp,
   promptBusinessRules,
+  promptRefineBusinessRules,
   promptImplementationTemplates,
   promptCasualOverview,
   promptTaskEnrichment,
+  type Language,
 } from './core/prompts.js';
 import { loadDocsContext } from './core/docsContext.js';
 import { fetchGitHubIssue } from './core/issue.js';
@@ -43,7 +51,7 @@ import { fetchGitHubIssue } from './core/issue.js';
 const MODELS = [
   { value: 'meta-llama/llama-3.3-70b-instruct:free', label: 'Llama 3.3 70B (free)' },
   { value: 'meta-llama/llama-3.2-3b-instruct:free',  label: 'Llama 3.2 3B (free, faster)' },
-  { value: 'google/gemma-3-27b-it:free',             label: 'Gemma 3 27B (free)' },
+  { value: 'nvidia/nemotron-nano-9b-v2:free',        label: 'Nemotron Nano 9B (free)' },
   { value: 'qwen/qwen3-coder:free',                  label: 'Qwen3 Coder (free)' },
   { value: 'anthropic/claude-3.5-sonnet',            label: 'Claude 3.5 Sonnet (paid)' },
   { value: 'openai/gpt-4o',                          label: 'GPT-4o (paid)' },
@@ -70,6 +78,27 @@ async function spin<T>(label: string, fn: () => Promise<T>): Promise<T> {
     s.stop(chalk.red('Failed.'));
     throw e;
   }
+}
+
+// ─── Step: resolve AI provider ────────────────────────────────────────────────
+
+async function resolveProvider(): Promise<Provider> {
+  const fromEnv = process.env['AI_PROVIDER']?.trim().toLowerCase();
+  if (fromEnv === 'ollama' || fromEnv === 'openrouter') {
+    p.note(`Using ${chalk.cyan(fromEnv)}`, 'Provider');
+    return fromEnv;
+  }
+
+  const choice = await p.select({
+    message: 'Which AI provider?',
+    options: [
+      { value: 'openrouter', label: 'OpenRouter', hint: 'cloud, needs an API key' },
+      { value: 'ollama', label: 'Ollama (local)', hint: 'runs on this machine, no API key' },
+    ],
+    initialValue: 'openrouter',
+  });
+  abort(choice);
+  return choice as Provider;
 }
 
 // ─── Step: resolve API key ────────────────────────────────────────────────────
@@ -108,6 +137,76 @@ async function resolveModel(): Promise<string> {
   return choice as string;
 }
 
+// ─── Step: resolve Ollama server + model ──────────────────────────────────────
+
+async function resolveOllamaBaseUrl(): Promise<string> {
+  const fromEnv = process.env['OLLAMA_BASE_URL']?.trim();
+  if (fromEnv) {
+    p.note(`Using ${chalk.cyan(fromEnv)}`, 'Ollama server');
+    return fromEnv.replace(/\/$/, '');
+  }
+
+  const input = await p.text({
+    message: 'Ollama server URL',
+    placeholder: DEFAULT_OLLAMA_BASE_URL,
+    defaultValue: DEFAULT_OLLAMA_BASE_URL,
+  });
+  abort(input);
+  return ((input as string).trim() || DEFAULT_OLLAMA_BASE_URL).replace(/\/$/, '');
+}
+
+async function resolveOllamaModel(baseUrl: string): Promise<string> {
+  const fromEnv = process.env['OLLAMA_MODEL']?.trim();
+  if (fromEnv) {
+    p.note(`Using ${chalk.cyan(fromEnv)}`, 'Model');
+    return fromEnv;
+  }
+
+  const models = await listOllamaModels(baseUrl).catch(() => null);
+
+  if (!models || models.length === 0) {
+    p.log.warn(
+      `Could not list models from ${baseUrl}. Is "ollama serve" running and do you have a ` +
+      `model pulled (e.g. "ollama pull llama3.1")?`
+    );
+    const input = await p.text({
+      message: 'Ollama model tag',
+      placeholder: 'llama3.1',
+      validate: (v) => (!v.trim() ? 'Required' : undefined),
+    });
+    abort(input);
+    return (input as string).trim();
+  }
+
+  const choice = await p.select({
+    message: 'Which local model?',
+    options: models.map((m) => ({ value: m, label: m })),
+  });
+  abort(choice);
+  return choice as string;
+}
+
+// ─── Step: resolve output language ────────────────────────────────────────────
+
+async function resolveLanguage(): Promise<Language> {
+  const fromEnv = process.env['DOC_LANGUAGE']?.trim();
+  if (fromEnv === 'en' || fromEnv === 'pt-BR') {
+    p.note(`Using ${chalk.cyan(fromEnv)}`, 'Language');
+    return fromEnv;
+  }
+
+  const choice = await p.select({
+    message: 'Which language should the generated file be written in?',
+    options: [
+      { value: 'en', label: 'English' },
+      { value: 'pt-BR', label: 'Português (Brasil)' },
+    ],
+    initialValue: 'en',
+  });
+  abort(choice);
+  return choice as Language;
+}
+
 // ─── Step: resolve working directory ─────────────────────────────────────────
 
 async function resolveCwd(): Promise<string> {
@@ -124,7 +223,7 @@ async function resolveCwd(): Promise<string> {
 
 // ─── Mode: document changes ───────────────────────────────────────────────────
 
-async function modeChanges(opts: OpenRouterOptions, cwd: string): Promise<void> {
+async function modeChanges(opts: AIOptions, cwd: string, lang: Language): Promise<void> {
   const baseRef = await p.text({
     message: 'Base branch / SHA to compare against',
     placeholder: 'origin/main',
@@ -179,7 +278,7 @@ async function modeChanges(opts: OpenRouterOptions, cwd: string): Promise<void> 
   };
 
   const summary = await spin('Generating summary...', () =>
-    callAI(promptChanges(ctx), { ...opts, maxTokens: 1024 })
+    generateInLanguage(promptChanges(ctx, lang), { ...opts, maxTokens: 1024 }, lang)
   );
 
   const date = new Date().toISOString().split('T')[0]!;
@@ -199,7 +298,7 @@ async function modeChanges(opts: OpenRouterOptions, cwd: string): Promise<void> 
 
 // ─── Mode: document single file ───────────────────────────────────────────────
 
-async function modeFile(opts: OpenRouterOptions, cwd: string): Promise<void> {
+async function modeFile(opts: AIOptions, cwd: string, lang: Language): Promise<void> {
   const filePath = await p.text({
     message: 'Path to the file',
     placeholder: 'src/index.ts',
@@ -222,7 +321,7 @@ async function modeFile(opts: OpenRouterOptions, cwd: string): Promise<void> {
   const outFull = path.resolve(cwd, (outputPath as string).trim());
 
   const doc = await spin(`Documenting ${file.path}...`, () =>
-    callAI(promptSingleFile(file, repoName), { ...opts, maxTokens: 2048 })
+    generateInLanguage(promptSingleFile(file, repoName, lang), { ...opts, maxTokens: 2048 }, lang)
   );
 
   p.note(doc.slice(0, 500) + (doc.length > 500 ? '\n...' : ''), 'Preview');
@@ -249,11 +348,16 @@ interface DocAgentConfig {
   heading: string;
   generatingLabel: string;
   buildPrompt: (snapshot: CodebaseSnapshot, repoName: string, snapshotText: string) => string;
+  // Optional second pass over the generated draft (e.g. self-critique to
+  // remove items that don't actually belong).
+  refine?: (draft: string) => Promise<string>;
+  refiningLabel?: string;
 }
 
 async function runDocAgent(
-  opts: OpenRouterOptions,
+  opts: AIOptions,
   cwd: string,
+  lang: Language,
   cfg: DocAgentConfig
 ): Promise<void> {
   const repoName = await getRepoName();
@@ -278,9 +382,13 @@ async function runDocAgent(
     'Codebase snapshot'
   );
 
-  const doc = await spin(cfg.generatingLabel, () =>
-    callAI(cfg.buildPrompt(snapshot, repoName, snapshotText), { ...opts, maxTokens: 4096 })
+  let doc = await spin(cfg.generatingLabel, () =>
+    generateInLanguage(cfg.buildPrompt(snapshot, repoName, snapshotText), { ...opts, maxTokens: 4096 }, lang)
   );
+
+  if (cfg.refine) {
+    doc = await spin(cfg.refiningLabel ?? 'Refining...', () => cfg.refine!(doc));
+  }
 
   p.note(doc.slice(0, 600) + (doc.length > 600 ? '\n...' : ''), 'Preview');
 
@@ -301,45 +409,52 @@ async function runDocAgent(
   p.outro(chalk.green('Done! ') + chalk.cyan(outFull));
 }
 
-async function modeFullApp(opts: OpenRouterOptions, cwd: string): Promise<void> {
-  return runDocAgent(opts, cwd, {
+async function modeFullApp(opts: AIOptions, cwd: string, lang: Language): Promise<void> {
+  return runDocAgent(opts, cwd, lang, {
     defaultOutputPath: 'docs/application.md',
     heading: 'Application Documentation',
     generatingLabel: 'Generating documentation...',
-    buildPrompt: promptFullApp,
+    buildPrompt: (snapshot: CodebaseSnapshot, repoName: string, snapshotText: string) =>
+      promptFullApp(snapshot, repoName, snapshotText, lang),
   });
 }
 
-async function modeBusinessRules(opts: OpenRouterOptions, cwd: string): Promise<void> {
-  return runDocAgent(opts, cwd, {
+async function modeBusinessRules(opts: AIOptions, cwd: string, lang: Language): Promise<void> {
+  return runDocAgent(opts, cwd, lang, {
     defaultOutputPath: 'docs/business-rules.md',
     heading: 'Business Rules',
     generatingLabel: 'Auditing business rules...',
-    buildPrompt: promptBusinessRules,
+    buildPrompt: (snapshot: CodebaseSnapshot, repoName: string, snapshotText: string) =>
+      promptBusinessRules(snapshot, repoName, snapshotText, lang),
+    refiningLabel: 'Filtering out non-business-rule noise...',
+    refine: (draft: string) =>
+      generateInLanguage(promptRefineBusinessRules(draft, lang), { ...opts, maxTokens: 4096 }, lang),
   });
 }
 
-async function modeTemplates(opts: OpenRouterOptions, cwd: string): Promise<void> {
-  return runDocAgent(opts, cwd, {
+async function modeTemplates(opts: AIOptions, cwd: string, lang: Language): Promise<void> {
+  return runDocAgent(opts, cwd, lang, {
     defaultOutputPath: 'docs/templates.md',
     heading: 'Implementation Templates',
     generatingLabel: 'Extracting implementation templates...',
-    buildPrompt: promptImplementationTemplates,
+    buildPrompt: (snapshot: CodebaseSnapshot, repoName: string, snapshotText: string) =>
+      promptImplementationTemplates(snapshot, repoName, snapshotText, lang),
   });
 }
 
-async function modeOverview(opts: OpenRouterOptions, cwd: string): Promise<void> {
-  return runDocAgent(opts, cwd, {
+async function modeOverview(opts: AIOptions, cwd: string, lang: Language): Promise<void> {
+  return runDocAgent(opts, cwd, lang, {
     defaultOutputPath: 'docs/overview.md',
     heading: 'Overview',
     generatingLabel: 'Writing casual overview...',
-    buildPrompt: promptCasualOverview,
+    buildPrompt: (snapshot: CodebaseSnapshot, repoName: string, snapshotText: string) =>
+      promptCasualOverview(snapshot, repoName, snapshotText, lang),
   });
 }
 
 // ─── Mode: release notes ──────────────────────────────────────────────────────
 
-async function modeReleaseNotes(opts: OpenRouterOptions, cwd: string): Promise<void> {
+async function modeReleaseNotes(opts: AIOptions, cwd: string, lang: Language): Promise<void> {
   const baseRef = await p.text({
     message: 'Base branch / SHA to compare against',
     placeholder: 'origin/main',
@@ -374,7 +489,7 @@ async function modeReleaseNotes(opts: OpenRouterOptions, cwd: string): Promise<v
   };
 
   const notes = await spin('Generating release notes...', () =>
-    callAI(promptReleaseNotes(ctx), { ...opts, maxTokens: 2048 })
+    generateInLanguage(promptReleaseNotes(ctx, lang), { ...opts, maxTokens: 2048 }, lang)
   );
 
   const date = new Date().toISOString().split('T')[0]!;
@@ -402,7 +517,7 @@ function slugify(text: string): string {
   return slug || `task-${Date.now()}`;
 }
 
-async function modeEnrichTask(opts: OpenRouterOptions, cwd: string): Promise<void> {
+async function modeEnrichTask(opts: AIOptions, cwd: string, lang: Language): Promise<void> {
   const source = await p.select({
     message: 'Where is the task coming from?',
     options: [
@@ -467,7 +582,7 @@ async function modeEnrichTask(opts: OpenRouterOptions, cwd: string): Promise<voi
   }
 
   const enriched = await spin('Enriching task...', () =>
-    callAI(promptTaskEnrichment(taskText, docsContext.text, repoName), { ...opts, maxTokens: 3072 })
+    generateInLanguage(promptTaskEnrichment(taskText, docsContext.text, repoName, lang), { ...opts, maxTokens: 3072 }, lang)
   );
 
   console.log('');
@@ -498,10 +613,21 @@ async function main(): Promise<void> {
   console.log('');
   p.intro(chalk.bgBlue.white.bold(' cli-doc-ai ') + '  AI-powered documentation generator');
 
-  const apiKey = await resolveApiKey();
-  const model  = await resolveModel();
-  const cwd    = await resolveCwd();
-  const opts: OpenRouterOptions = { apiKey, model };
+  const provider = await resolveProvider();
+
+  let opts: AIOptions;
+  if (provider === 'ollama') {
+    const baseUrl = await resolveOllamaBaseUrl();
+    const model = await resolveOllamaModel(baseUrl);
+    opts = { provider: 'ollama', model, baseUrl };
+  } else {
+    const apiKey = await resolveApiKey();
+    const model = await resolveModel();
+    opts = { provider: 'openrouter', apiKey, model };
+  }
+
+  const cwd = await resolveCwd();
+  const lang = await resolveLanguage();
 
   const mode = await p.select({
     message: 'What do you want to do?',
@@ -552,14 +678,14 @@ async function main(): Promise<void> {
 
   try {
     switch (mode as string) {
-      case 'changes':        await modeChanges(opts, cwd); break;
-      case 'file':           await modeFile(opts, cwd);    break;
-      case 'full':           await modeFullApp(opts, cwd); break;
-      case 'business-rules': await modeBusinessRules(opts, cwd); break;
-      case 'templates':      await modeTemplates(opts, cwd); break;
-      case 'overview':       await modeOverview(opts, cwd); break;
-      case 'release':        await modeReleaseNotes(opts, cwd); break;
-      case 'enrich-task':    await modeEnrichTask(opts, cwd); break;
+      case 'changes':        await modeChanges(opts, cwd, lang); break;
+      case 'file':           await modeFile(opts, cwd, lang);    break;
+      case 'full':           await modeFullApp(opts, cwd, lang); break;
+      case 'business-rules': await modeBusinessRules(opts, cwd, lang); break;
+      case 'templates':      await modeTemplates(opts, cwd, lang); break;
+      case 'overview':       await modeOverview(opts, cwd, lang); break;
+      case 'release':        await modeReleaseNotes(opts, cwd, lang); break;
+      case 'enrich-task':    await modeEnrichTask(opts, cwd, lang); break;
     }
   } catch (err) {
     p.cancel(`Error: ${(err as Error).message}`);

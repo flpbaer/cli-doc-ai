@@ -85,10 +85,29 @@ doc-ai
 ```
 
 The CLI will guide you through:
+- Choosing an AI provider (OpenRouter or a local Ollama server)
 - Choosing an AI model (free options available)
+- Choosing the language for the generated file (English or Português)
 - Picking the base branch to compare against
 - Setting the version and release title
 - Previewing the generated entry before writing
+
+### Using a local Ollama server instead of OpenRouter
+
+No API key needed — everything runs on your machine.
+
+```bash
+# make sure Ollama is running and you've pulled a model
+ollama pull llama3.1
+
+AI_PROVIDER=ollama doc-ai
+# optional: OLLAMA_BASE_URL (default http://localhost:11434), OLLAMA_MODEL
+```
+
+### Output language
+
+The generated file's language defaults to a prompt (English or Português). Skip it by setting
+`DOC_LANGUAGE=en` or `DOC_LANGUAGE=pt-BR` in your `.env`.
 
 ---
 
@@ -140,13 +159,18 @@ For best results, generate the business rules and templates docs first.
 
 ## Free models (default)
 
-No cost, no config needed:
+No cost, no config needed. If the requested model is rate-limited upstream, the CLI automatically
+retries with the next one in this list:
 
-- `mistralai/mistral-7b-instruct:free`
-- `meta-llama/llama-3-8b-instruct:free`
-- `google/gemma-7b-it:free`
+- `meta-llama/llama-3.3-70b-instruct:free`
+- `qwen/qwen3-coder:free`
+- `meta-llama/llama-3.2-3b-instruct:free`
+- `nvidia/nemotron-nano-9b-v2:free`
 
-For better quality, set `openrouter-model` to `anthropic/claude-3.5-sonnet` or `openai/gpt-4o`.
+These are spread across different upstream providers on purpose — if one provider is congested,
+the others are usually still available. For better quality (and no shared rate limits), set
+`openrouter-model` to `anthropic/claude-3.5-sonnet` or `openai/gpt-4o` (requires credits on your
+OpenRouter account), or use a local Ollama model instead (see above).
 
 ---
 

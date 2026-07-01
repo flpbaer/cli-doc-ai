@@ -30,7 +30,12 @@ const PRIORITY_FILES = new Set([
 
 const MAX_FILE_CHARS = 3_000;
 const MAX_TOTAL_CHARS = 60_000;
-const MAX_DEPTH = 6;
+// Directory depth is cheap to traverse (it doesn't consume the char budget
+// above) — this is just a guard against pathological trees, not a real
+// limit. Conventional package structures (e.g. Java's src/main/java/com/
+// company/product/service/) routinely sit 7-8 levels deep before reaching
+// any actual business logic, so this needs to be generous.
+const MAX_DEPTH = 20;
 
 export interface ScannedFile {
   path: string;       // relative path from cwd
@@ -102,12 +107,12 @@ function collectFiles(
 
   const results: ScannedFile[] = [];
 
-  // Priority files first
-  const sorted = entries.sort((a, b) => {
-    const ap = PRIORITY_FILES.has(a.name) ? 0 : 1;
-    const bp = PRIORITY_FILES.has(b.name) ? 0 : 1;
-    return ap - bp;
-  });
+  // Priority files first, then directories, then regular files — so we
+  // descend into the actual source tree before the shared char budget gets
+  // spent on whatever plain files happen to sit next to it (e.g. a pile of
+  // environment/config files in the same folder as `src/`).
+  const rank = (e: fs.Dirent) => (PRIORITY_FILES.has(e.name) ? 0 : e.isDirectory() ? 1 : 2);
+  const sorted = entries.sort((a, b) => rank(a) - rank(b));
 
   for (const entry of sorted) {
     if (IGNORE.has(entry.name)) continue;
